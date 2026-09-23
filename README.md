@@ -7,8 +7,9 @@
 
 ## What it does
 
-- Lives in your **menu bar** — a little sun-behind-a-hill glyph whose sun height tracks your progress, next to the `mm:ss` countdown.
-- Click it for a **sunrise popover**: the sky warms from night to dawn as the sun rises, with the countdown, Start/Pause (spacebar), Reset, and a session-length slider (2 min–2 hr, default 15).
+- Lives in your **menu bar** — a little glyph that runs a day/night cycle as your session progresses (a moon sets, then the sun rises from behind the hill), next to the `mm:ss` countdown.
+- Click it for a **sunrise popover**: a starry night sky in which the moon sets to the left, then the sun rises from behind layered hills while the sky and mountains warm from night to dawn and the stars fade out. Includes the countdown, Start/Pause (spacebar), Reset, and a session-length slider (1 min–2 hr, default 15).
+- An **expand button** pops out a larger floating focus timer that stays above your other windows.
 - When the session ends it plays a chime and posts a macOS notification.
 - No Dock icon — it's a menu-bar-only app.
 

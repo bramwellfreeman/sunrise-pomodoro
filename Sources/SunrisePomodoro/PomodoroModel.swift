@@ -15,8 +15,9 @@ final class PomodoroModel: ObservableObject {
     private var endDate: Date?
     private var timer: Timer?
 
-    let minSeconds: TimeInterval = 2 * 60           // 2 min  (matches Omarchy widget)
+    let minSeconds: TimeInterval = 60               // 1 min
     let maxSeconds: TimeInterval = 2 * 60 * 60      // 2 hr
+    let stepSeconds: TimeInterval = 30              // slider granularity
 
     private let defaultsKey = "sessionLength"
 
@@ -36,6 +37,37 @@ final class PomodoroModel: ObservableObject {
 
         // Test hook: render the real glyph at several progress values, then exit.
         if let dir = env["SUNRISE_DUMP_GLYPHS"] { dumpGlyphs(to: dir); exit(0) }
+        // Test hook: render the popover sunrise scene at several progress values.
+        if let dir = env["SUNRISE_DUMP_SCENE"] {
+            Task { @MainActor in dumpScene(to: dir); exit(0) }
+        }
+
+        if env["SUNRISE_SHOW_FOCUS"] != nil {
+            DispatchQueue.main.async { FocusWindowController.shared.toggle(model: self) }
+        }
+    }
+
+    @MainActor
+    private func dumpScene(to dir: String) {
+        for step in 0...8 {
+            let p = Double(step) / 8.0
+            savePNG(SunriseView(progress: p).frame(width: 300, height: 170),
+                    to: "\(dir)/scene_\(Int(p * 100)).png")
+        }
+        // Popover with the slider ~half-way so the black fill is visible.
+        sessionLength = 61 * 60
+        savePNG(PopoverView(model: self).background(Color(nsColor: .windowBackgroundColor)),
+                to: "\(dir)/popover.png")
+    }
+
+    @MainActor
+    private func savePNG<V: View>(_ view: V, to path: String) {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let tiff = renderer.nsImage?.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]) else { return }
+        try? png.write(to: URL(fileURLWithPath: path))
     }
 
     /// Writes barGlyph@8x at progress 0…1 to `dir` for visual verification.
@@ -71,12 +103,22 @@ final class PomodoroModel: ObservableObject {
         return String(format: "%d:%02d", t / 60, t % 60)
     }
 
-    var sessionMinutes: Double { (sessionLength / 60).rounded() }
+    var sessionMinutes: Double { sessionLength / 60 }
+
+    /// Human label for the current session length: "30 sec", "1 min", "1 min 30 sec"…
+    var sessionLabel: String {
+        let s = Int(sessionLength.rounded())
+        if s < 60 { return "\(s) sec" }
+        let m = s / 60, r = s % 60
+        return r == 0 ? "\(m) min" : "\(m) min \(r) sec"
+    }
 
     // MARK: Controls
 
     func setSessionMinutes(_ minutes: Double) {
-        let secs = min(maxSeconds, max(minSeconds, minutes * 60))
+        // Snap to the nearest step (30s), then clamp.
+        let snapped = (minutes * 60 / stepSeconds).rounded() * stepSeconds
+        let secs = min(maxSeconds, max(minSeconds, snapped))
         sessionLength = secs
         UserDefaults.standard.set(secs, forKey: defaultsKey)
         if !isRunning { remaining = secs }
@@ -124,9 +166,10 @@ final class PomodoroModel: ObservableObject {
         NSSound(named: "Glass")?.play()
 
         let content = UNMutableNotificationContent()
-        content.title = "Sunrise complete ☀️"
-        content.body = "Your \(Int(sessionLength / 60))-minute session is done."
+        content.title = "Time's up ☀️"
+        content.body = "Take a break and enjoy the sunshine!"
         content.sound = .default
+        // The leading icon is the app's own icon (from the bundle) — no attachment.
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
 
@@ -140,8 +183,8 @@ final class PomodoroModel: ObservableObject {
     // MARK: Menu-bar glyph
 
     /// Small colored icon: sun rising from behind a hill. Regenerated each tick.
-    /// Coordinates are bottom-left origin. The sun travels most of the icon
-    /// height so the rise is clearly visible even at menu-bar scale.
+    /// Day/night cycle at menu-bar scale: moon sinks in the first half, sun
+    /// rises in the second. Coordinates are bottom-left origin.
     var barGlyph: NSImage { glyph(for: progress) }
 
     func glyph(for progress: Double) -> NSImage {
@@ -150,17 +193,25 @@ final class PomodoroModel: ObservableObject {
         img.lockFocus()
 
         let cx: CGFloat = size.width / 2
-        let sunR: CGFloat = 4.5
+        let r: CGFloat = 4.5
         let crest: CGFloat = 8                 // hill high point (from bottom)
+        let hiddenY = crest - r + 1            // top ~ at crest → hidden behind hill
+        let topY = size.height - r + 0.5       // fully up, near the top edge
 
-        // Sun center: hidden just behind the crest at p=0, well clear of it at p=1.
-        let restY = crest - sunR + 1           // top of sun ~ at crest → hidden
-        let topY  = size.height - sunR + 0.5   // fully risen, near the top edge
-        let cy = restY + (topY - restY) * CGFloat(progress)
+        let moonP = min(1, progress / 0.5)     // 0 -> 1 across the first half
+        let sunP  = max(0, (progress - 0.5) / 0.5)
 
-        // Sun (drawn first so the hill can hide its lower half)
+        // Moon sets down and to the left, fading out behind the hill.
+        let moonX = cx + (r - cx) * CGFloat(moonP)                   // drift toward left edge
+        let moonY = topY - (topY - hiddenY) * CGFloat(moonP)
+        let moonFade = 1 - max(0, (CGFloat(moonP) - 0.7) / 0.3)
+        Palette.moonNS.withAlphaComponent(moonFade).setFill()
+        NSBezierPath(ovalIn: NSRect(x: moonX - r, y: moonY - r, width: r * 2, height: r * 2)).fill()
+
+        // Sun rises from behind the hill to the top (linear).
+        let cy = hiddenY + (topY - hiddenY) * CGFloat(sunP)
         Palette.sunNS.setFill()
-        NSBezierPath(ovalIn: NSRect(x: cx - sunR, y: cy - sunR, width: sunR * 2, height: sunR * 2)).fill()
+        NSBezierPath(ovalIn: NSRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)).fill()
 
         // Hill in front — a gentle mound reaching `crest` in the middle.
         let hill = NSBezierPath()
